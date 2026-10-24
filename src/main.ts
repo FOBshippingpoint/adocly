@@ -5,7 +5,7 @@ import "@asciidoctor/core/dist/css/asciidoctor.css";
 import lightTheme from "highlight.js/styles/github.css?url";
 import darkTheme from "highlight.js/styles/github-dark.css?url";
 import "./style.css";
-import { Database, type Snapshot } from "./database";
+import { Database, type Snapshot, type Theme, type ViewMode } from "./database";
 import { HashShare } from "./hash-share";
 import { debounce } from "./debounce";
 
@@ -31,10 +31,10 @@ console.log("Plain browser JavaScript");
 const database = new Database();
 const imageCache = new Map<string, string>();
 const state = {
-  split: 50,
-  viewMode: "split",
-  desktopViewMode: "split",
-  theme: "light",
+  splitRatio: 50,
+  viewMode: "split" as ViewMode,
+  desktopViewMode: "split" as ViewMode,
+  theme: "light" as Theme,
   saveTimer: undefined as number | undefined,
   snapshotTimer: undefined as number | undefined,
   previewRequest: 0,
@@ -48,13 +48,21 @@ const splitter = $<HTMLElement>("#splitter")!;
 const viewButtons = $$("[data-view]");
 const viewSwitch = $<HTMLElement>("#view-switch")!;
 
-function setSplit(value: number) {
-  state.split = Math.max(15, Math.min(Number(value) || 50, 85));
-  layout.style.setProperty("--split", `${state.split}%`);
-  splitter.setAttribute("aria-valuenow", String(Math.round(state.split)));
+function saveLayout() {
+  database.setSetting("layout", {
+    mode: state.viewMode,
+    splitRatio: state.splitRatio,
+  });
 }
 
-function setViewMode(mode: string) {
+function setSplitRatio(value: number) {
+  state.splitRatio = Math.max(15, Math.min(Number(value) || 50, 85));
+  layout.style.setProperty("--split", `${state.splitRatio}%`);
+  splitter.setAttribute("aria-valuenow", String(Math.round(state.splitRatio)));
+  saveLayout();
+}
+
+function setViewMode(mode: ViewMode) {
   state.viewMode = mode;
   if (!matchMedia("(max-width: 700px)").matches) state.desktopViewMode = mode;
   layout.dataset.viewMode = mode;
@@ -64,9 +72,10 @@ function setViewMode(mode: string) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
+  saveLayout();
 }
 
-function setTheme(theme: string) {
+function setTheme(theme: Theme) {
   state.theme = theme;
   document.body.dataset.theme = theme;
   $<HTMLElement>("#theme-button")!.classList.toggle("active", theme === "dark");
@@ -194,7 +203,7 @@ function renderHistory(items: Snapshot[], activeId: number | null = null) {
         (entry) => entry.id === Number(item.dataset.id),
       )!;
       source.value = snapshot.content;
-      await database.setSetting("content", snapshot.content);
+      database.setSetting("content", snapshot.content);
       await syncDocument(snapshot.content);
       menu.classList.remove("open");
       $<HTMLElement>("#history-button")!.classList.remove("active");
@@ -305,7 +314,7 @@ function bindSplitter() {
   splitter.on("pointermove", (event) => {
     if (event.pointerId !== pointerId) return;
     const bounds = layout.getBoundingClientRect();
-    setSplit(
+    setSplitRatio(
       ((mobile.matches
         ? event.clientY - bounds.top
         : event.clientX - bounds.left) /
@@ -323,18 +332,19 @@ function bindSplitter() {
   splitter.on("pointerup", stop);
   splitter.on("pointercancel", stop);
   splitter.on("lostpointercapture", stop);
-  splitter.on("dblclick", () => setSplit(50));
+  splitter.on("dblclick", () => setSplitRatio(50));
   splitter.on("keydown", (event) => {
     const down = mobile.matches ? "ArrowUp" : "ArrowLeft";
     const up = mobile.matches ? "ArrowDown" : "ArrowRight";
     if (![down, up, "Home", "End", "Enter"].includes(event.key)) return;
     event.preventDefault();
-    if (event.key === "Home") setSplit(15);
-    else if (event.key === "End") setSplit(85);
-    else if (event.key === "Enter") setSplit(50);
+    if (event.key === "Home") setSplitRatio(15);
+    else if (event.key === "End") setSplitRatio(85);
+    else if (event.key === "Enter") setSplitRatio(50);
     else
-      setSplit(
-        state.split + (event.key === down ? -1 : 1) * (event.shiftKey ? 10 : 2),
+      setSplitRatio(
+        state.splitRatio +
+          (event.key === down ? -1 : 1) * (event.shiftKey ? 10 : 2),
       );
   });
 }
@@ -360,14 +370,14 @@ function bindToolbar() {
       1200,
     );
   });
-  $<HTMLElement>("#theme-button")!.on("click", async () => {
+  $<HTMLElement>("#theme-button")!.on("click", () => {
     const theme = state.theme === "dark" ? "light" : "dark";
     setTheme(theme);
-    await database.setSetting("theme", theme);
+    database.setSetting("theme", theme);
   });
   viewButtons.forEach((button) =>
     button.on("click", () => {
-      setViewMode(button.dataset.view!);
+      setViewMode(button.dataset.view as ViewMode);
     }),
   );
   document.on("pointerdown", (event) => {
@@ -398,7 +408,7 @@ async function loadFromHash() {
     const text = await HashShare.decode(location.hash);
     if (!text) return false;
     source.value = text;
-    await database.setSetting("content", text);
+    database.setSetting("content", text);
     await recordSnapshot(text);
     await syncDocument(text);
     return true;
@@ -408,18 +418,23 @@ async function loadFromHash() {
 }
 
 async function init() {
-  setSplit(50);
-  setViewMode(matchMedia("(max-width: 700px)").matches ? "write" : "split");
+  const savedLayout = database.getSetting("layout", {
+    mode: matchMedia("(max-width: 700px)").matches ? "write" : "split",
+    splitRatio: 50,
+  });
+  state.viewMode = savedLayout.mode;
+  setSplitRatio(savedLayout.splitRatio);
+  setViewMode(savedLayout.mode);
   bindSource();
   bindSplitter();
   bindToolbar();
-  const savedTheme = await database.getSetting("theme");
+  const savedTheme = database.getSetting("theme");
   setTheme(
     savedTheme ||
       (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
   );
   if (!(await loadFromHash())) {
-    source.value = (await database.getSetting("content", DEFAULT_CONTENT))!;
+    source.value = database.getSetting("content", DEFAULT_CONTENT);
     await recordSnapshot(source.value);
     await syncDocument(source.value);
   }

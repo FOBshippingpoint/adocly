@@ -4,6 +4,20 @@ export interface Snapshot {
   timestamp: number;
 }
 
+export type ViewMode = "write" | "split" | "preview";
+export type Theme = "light" | "dark";
+
+export interface LayoutSetting {
+  mode: ViewMode;
+  splitRatio: number;
+}
+
+export interface Settings {
+  content: string;
+  theme: Theme;
+  layout: LayoutSetting;
+}
+
 export class Database {
   name: string;
   version: number;
@@ -28,8 +42,6 @@ export class Database {
           });
           history.createIndex("timestamp", "timestamp", { unique: false });
         }
-        if (!db.objectStoreNames.contains("settings"))
-          db.createObjectStore("settings", { keyPath: "key" });
       };
       request.onsuccess = () => {
         this.connection = request.result;
@@ -39,30 +51,26 @@ export class Database {
     });
   }
 
-  async getSetting(
-    key: string,
-    fallback: string | null = null,
-  ): Promise<string | null> {
-    const connection = await this.open();
-    return new Promise((resolve) => {
-      const request = connection
-        .transaction("settings", "readonly")
-        .objectStore("settings")
-        .get(key);
-      request.onsuccess = () =>
-        resolve(request.result ? request.result.value : fallback);
-      request.onerror = () => resolve(fallback);
-    });
+  getSetting<K extends keyof Settings>(key: K): Settings[K] | null;
+  getSetting<K extends keyof Settings>(
+    key: K,
+    fallback: Settings[K],
+  ): Settings[K];
+  getSetting<K extends keyof Settings>(
+    key: K,
+    fallback: Settings[K] | null = null,
+  ): Settings[K] | null {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    try {
+      return JSON.parse(raw) as Settings[K];
+    } catch {
+      return (raw as unknown as Settings[K]) ?? fallback;
+    }
   }
 
-  async setSetting(key: string, value: string): Promise<void> {
-    const connection = await this.open();
-    return new Promise((resolve, reject) => {
-      const transaction = connection.transaction("settings", "readwrite");
-      transaction.objectStore("settings").put({ key, value });
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
+  setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void {
+    localStorage.setItem(key, JSON.stringify(value));
   }
 
   private async getImageDir(): Promise<FileSystemDirectoryHandle> {
