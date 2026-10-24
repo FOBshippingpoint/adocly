@@ -36,19 +36,13 @@ declare global {
 EventTarget.prototype.on = Element.prototype.addEventListener;
 EventTarget.prototype.off = Element.prototype.removeEventListener;
 Element.prototype.$ = Element.prototype.querySelector;
-Element.prototype.$$ = function <T extends Element = HTMLElement>(
-  selector: string,
-): T[] {
+Element.prototype.$$ = function <T extends Element = HTMLElement>(selector: string): T[] {
   return [...this.querySelectorAll<T>(selector)];
 };
 DocumentFragment.prototype.$ = DocumentFragment.prototype.querySelector;
-DocumentFragment.prototype.$$ = function <T extends Element = HTMLElement>(
-  selector: string,
-): T[] {
+DocumentFragment.prototype.$$ = function <T extends Element = HTMLElement>(selector: string): T[] {
   return [...this.querySelectorAll<T>(selector)];
 };
 
 export const $ = document.querySelector.bind(document);
-export const $$ = (selector: string) => [
-  ...document.querySelectorAll<HTMLElement>(selector),
-];
+export const $$ = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)];

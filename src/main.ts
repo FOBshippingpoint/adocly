@@ -35,7 +35,6 @@ const state = {
   viewMode: "split" as ViewMode,
   desktopViewMode: "split" as ViewMode,
   theme: "light" as Theme,
-  saveTimer: undefined as number | undefined,
   snapshotTimer: undefined as number | undefined,
   previewRequest: 0,
   lastSnapshot: 0,
@@ -79,12 +78,8 @@ function setTheme(theme: Theme) {
   state.theme = theme;
   document.body.dataset.theme = theme;
   $<HTMLElement>("#theme-button")!.classList.toggle("active", theme === "dark");
-  $<HTMLElement>("#theme-button")!.setAttribute(
-    "aria-pressed",
-    String(theme === "dark"),
-  );
-  $<HTMLLinkElement>("#highlight-theme")!.href =
-    theme === "dark" ? darkTheme : lightTheme;
+  $<HTMLElement>("#theme-button")!.setAttribute("aria-pressed", String(theme === "dark"));
+  $<HTMLLinkElement>("#highlight-theme")!.href = theme === "dark" ? darkTheme : lightTheme;
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -106,9 +101,7 @@ async function loadImageData(name: string) {
 }
 
 async function cacheImages(text: string) {
-  const names = [...text.matchAll(/image::?(img-[a-z0-9]+\.[a-z0-9]+)/gi)].map(
-    (match) => match[1],
-  );
+  const names = [...text.matchAll(/image::?(img-[a-z0-9]+\.[a-z0-9]+)/gi)].map((match) => match[1]);
   await Promise.all(names.map((name) => loadImageData(name)));
 }
 
@@ -127,9 +120,7 @@ async function renderPreview(text: string, request: number) {
         return resolve();
       }
       Idiomorph.morph(preview, html, { morphStyle: "innerHTML" });
-      preview
-        .$$<HTMLElement>("pre code")
-        .forEach((code) => hljs.highlightElement(code));
+      preview.$$<HTMLElement>("pre code").forEach((code) => hljs.highlightElement(code));
       preview.$$<HTMLImageElement>("img").forEach((image) => {
         const name = image.getAttribute("src");
         const dataUrl = name && imageCache.get(name);
@@ -183,13 +174,13 @@ async function syncDocument(text: string) {
   }
 }
 
-async function recordSnapshot(text: string) {
-  const snapshot = await database.addSnapshot(text);
+function recordSnapshot(text: string) {
+  const snapshot = database.addSnapshot(text);
   state.lastSnapshot = Date.now();
-  renderHistory(await database.getHistory(), snapshot?.id);
+  renderHistory(database.getHistory(), snapshot?.id);
 }
 
-function renderHistory(items: Snapshot[], activeId: number | null = null) {
+function renderHistory(items: Snapshot[], activeId: string | null = null) {
   const menu = $<HTMLElement>("#history-menu")!;
   menu.innerHTML = items
     .map(
@@ -199,11 +190,9 @@ function renderHistory(items: Snapshot[], activeId: number | null = null) {
     .join("");
   menu.$$<HTMLElement>("[data-id]").forEach((item) =>
     item.on("click", async () => {
-      const snapshot = items.find(
-        (entry) => entry.id === Number(item.dataset.id),
-      )!;
+      const snapshot = items.find((entry) => entry.id === item.dataset.id)!;
       source.value = snapshot.content;
-      database.setSetting("content", snapshot.content);
+      recordSnapshot(snapshot.content);
       await syncDocument(snapshot.content);
       menu.classList.remove("open");
       $<HTMLElement>("#history-button")!.classList.remove("active");
@@ -220,10 +209,7 @@ function insertTextAtCursor(text: string) {
 
 async function addImages(files: File[]) {
   for (const file of files) {
-    const extension = (file.type.split("/")[1] || "png").replace(
-      /[^a-z0-9]/gi,
-      "",
-    );
+    const extension = (file.type.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "");
     const name = `img-${Date.now().toString(36)}.${extension}`;
     imageCache.set(name, await blobToDataUrl(file));
     await database.saveImage(name, file);
@@ -235,11 +221,6 @@ function bindSource() {
   source.on("input", () => {
     const text = source.value;
     syncDocument(text);
-    clearTimeout(state.saveTimer);
-    state.saveTimer = setTimeout(
-      () => database.setSetting("content", text),
-      200,
-    );
     if (Date.now() - state.lastSnapshot > 15000) recordSnapshot(text);
     else {
       clearTimeout(state.snapshotTimer);
@@ -247,19 +228,13 @@ function bindSource() {
     }
   });
   source.on("copy", (event) => {
-    const selected = source.value.slice(
-      source.selectionStart,
-      source.selectionEnd,
-    );
+    const selected = source.value.slice(source.selectionStart, source.selectionEnd);
     if (!selected || !/image::?img-/i.test(selected)) return;
     event.preventDefault();
     event.clipboardData?.setData("text/plain", expandImageReferences(selected));
   });
   source.on("cut", (event) => {
-    const selected = source.value.slice(
-      source.selectionStart,
-      source.selectionEnd,
-    );
+    const selected = source.value.slice(source.selectionStart, source.selectionEnd);
     if (!selected || !/image::?img-/i.test(selected)) return;
     event.preventDefault();
     event.clipboardData?.setData("text/plain", expandImageReferences(selected));
@@ -294,10 +269,7 @@ function bindSplitter() {
   const mobile = matchMedia("(max-width: 700px)");
   let pointerId: number | null = null;
   const updateOrientation = () =>
-    splitter.setAttribute(
-      "aria-orientation",
-      mobile.matches ? "horizontal" : "vertical",
-    );
+    splitter.setAttribute("aria-orientation", mobile.matches ? "horizontal" : "vertical");
   updateOrientation();
   mobile.on("change", (event) => {
     updateOrientation();
@@ -315,17 +287,14 @@ function bindSplitter() {
     if (event.pointerId !== pointerId) return;
     const bounds = layout.getBoundingClientRect();
     setSplitRatio(
-      ((mobile.matches
-        ? event.clientY - bounds.top
-        : event.clientX - bounds.left) /
+      ((mobile.matches ? event.clientY - bounds.top : event.clientX - bounds.left) /
         (mobile.matches ? bounds.height : bounds.width)) *
         100,
     );
   });
   const stop = (event: PointerEvent) => {
     if (event.pointerId !== pointerId) return;
-    if (splitter.hasPointerCapture(pointerId))
-      splitter.releasePointerCapture(pointerId);
+    if (splitter.hasPointerCapture(pointerId)) splitter.releasePointerCapture(pointerId);
     pointerId = null;
     layout.classList.remove("resizing");
   };
@@ -336,26 +305,33 @@ function bindSplitter() {
   splitter.on("keydown", (event) => {
     const down = mobile.matches ? "ArrowUp" : "ArrowLeft";
     const up = mobile.matches ? "ArrowDown" : "ArrowRight";
-    if (![down, up, "Home", "End", "Enter"].includes(event.key)) return;
+    if (![down, up, "Home", "End", "Enter"].includes(event.key)) {
+      return;
+    }
     event.preventDefault();
-    if (event.key === "Home") setSplitRatio(15);
-    else if (event.key === "End") setSplitRatio(85);
-    else if (event.key === "Enter") setSplitRatio(50);
-    else
-      setSplitRatio(
-        state.splitRatio +
-          (event.key === down ? -1 : 1) * (event.shiftKey ? 10 : 2),
-      );
+    switch (event.key) {
+      case "Home":
+        setSplitRatio(15);
+        break;
+      case "End":
+        setSplitRatio(85);
+        break;
+      case "Enter":
+        setSplitRatio(50);
+        break;
+      default:
+        setSplitRatio(state.splitRatio + (event.key === down ? -1 : 1) * (event.shiftKey ? 10 : 2));
+    }
   });
 }
 
 function bindToolbar() {
   const historyButton = $<HTMLElement>("#history-button")!;
   const menu = $<HTMLElement>("#history-menu")!;
-  historyButton.on("click", async () => {
+  historyButton.on("click", () => {
     const open = menu.classList.toggle("open");
     historyButton.classList.toggle("active", open);
-    if (open) renderHistory(await database.getHistory());
+    if (open) renderHistory(database.getHistory());
   });
   $<HTMLElement>("#share-button")!.on("click", async () => {
     const encoded = await HashShare.encode(source.value);
@@ -365,10 +341,7 @@ function bindToolbar() {
     const button = $<HTMLElement>("#share-button")!;
     button.classList.add("active");
     clearTimeout(state.shareTimer);
-    state.shareTimer = setTimeout(
-      () => button.classList.remove("active"),
-      1200,
-    );
+    state.shareTimer = setTimeout(() => button.classList.remove("active"), 1200);
   });
   $<HTMLElement>("#theme-button")!.on("click", () => {
     const theme = state.theme === "dark" ? "light" : "dark";
@@ -408,8 +381,7 @@ async function loadFromHash() {
     const text = await HashShare.decode(location.hash);
     if (!text) return false;
     source.value = text;
-    database.setSetting("content", text);
-    await recordSnapshot(text);
+    recordSnapshot(text);
     await syncDocument(text);
     return true;
   } catch (_) {
@@ -418,6 +390,7 @@ async function loadFromHash() {
 }
 
 async function init() {
+  await database.init(DEFAULT_CONTENT);
   const savedLayout = database.getSetting("layout", {
     mode: matchMedia("(max-width: 700px)").matches ? "write" : "split",
     splitRatio: 50,
@@ -429,13 +402,10 @@ async function init() {
   bindSplitter();
   bindToolbar();
   const savedTheme = database.getSetting("theme");
-  setTheme(
-    savedTheme ||
-      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
-  );
+  setTheme(savedTheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   if (!(await loadFromHash())) {
-    source.value = database.getSetting("content", DEFAULT_CONTENT);
-    await recordSnapshot(source.value);
+    source.value = database.getContent(DEFAULT_CONTENT);
+    recordSnapshot(source.value);
     await syncDocument(source.value);
   }
   window.on("hashchange", loadFromHash);

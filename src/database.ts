@@ -1,5 +1,15 @@
+import * as Automerge from "@automerge/automerge/slim";
+import wasmUrl from "@automerge/automerge/automerge.wasm?url";
+import {
+  type AutomergeUrl,
+  type DocHandle,
+  Repo,
+  type UrlHeads,
+} from "@automerge/automerge-repo/slim";
+import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
+
 export interface Snapshot {
-  id: number;
+  id: string;
   content: string;
   timestamp: number;
 }
@@ -13,49 +23,51 @@ export interface LayoutSetting {
 }
 
 export interface Settings {
-  content: string;
+  docUrl: AutomergeUrl;
   theme: Theme;
   layout: LayoutSetting;
 }
 
-export class Database {
-  name: string;
-  version: number;
-  connection: IDBDatabase | null;
+interface DocSchema {
+  content: string;
+}
 
-  constructor(name = "AdoclyDB") {
-    this.name = name;
-    this.version = 3;
-    this.connection = null;
+export class Database {
+  private handle: DocHandle<DocSchema> | null = null;
+  private initPromise: Promise<DocHandle<DocSchema>> | null = null;
+
+  async init(defaultContent: string): Promise<DocHandle<DocSchema>> {
+    if (this.handle) return this.handle;
+    if (this.initPromise) return this.initPromise;
+
+    this.initPromise = (async () => {
+      await Automerge.initializeWasm(wasmUrl);
+      const repo = new Repo({
+        storage: new IndexedDBStorageAdapter(),
+      });
+      const savedUrl = this.getSetting("docUrl");
+      if (savedUrl) {
+        try {
+          this.handle = await repo.find<DocSchema>(savedUrl);
+          return this.handle;
+        } catch {
+          // Fall through to create a new document if not found in storage
+        }
+      }
+      this.handle = repo.create<DocSchema>({ content: defaultContent });
+      this.setSetting("docUrl", this.handle.url);
+      return this.handle;
+    })();
+
+    return this.initPromise;
   }
 
-  async open(): Promise<IDBDatabase> {
-    if (this.connection) return this.connection;
-    return new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(this.name, this.version);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains("history")) {
-          const history = db.createObjectStore("history", {
-            keyPath: "id",
-            autoIncrement: true,
-          });
-          history.createIndex("timestamp", "timestamp", { unique: false });
-        }
-      };
-      request.onsuccess = () => {
-        this.connection = request.result;
-        resolve(this.connection);
-      };
-      request.onerror = () => reject(request.error);
-    });
+  getContent(fallback = ""): string {
+    return this.handle?.doc()?.content ?? fallback;
   }
 
   getSetting<K extends keyof Settings>(key: K): Settings[K] | null;
-  getSetting<K extends keyof Settings>(
-    key: K,
-    fallback: Settings[K],
-  ): Settings[K];
+  getSetting<K extends keyof Settings>(key: K, fallback: Settings[K]): Settings[K];
   getSetting<K extends keyof Settings>(
     key: K,
     fallback: Settings[K] | null = null,
@@ -97,37 +109,37 @@ export class Database {
     }
   }
 
-  async getHistory(): Promise<Snapshot[]> {
-    const connection = await this.open();
-    return new Promise((resolve, reject) => {
-      const request = connection
-        .transaction("history", "readonly")
-        .objectStore("history")
-        .getAll();
-      request.onsuccess = () =>
-        resolve(
-          (request.result || []).sort((a, b) => b.timestamp - a.timestamp),
-        );
-      request.onerror = () => reject(request.error);
-    });
+  private snapshotForHeads(handle: DocHandle<DocSchema>, heads: UrlHeads): Snapshot {
+    const head = heads[0];
+    const meta = handle.metadata(head);
+    const viewDoc = handle.view(heads).doc();
+    return {
+      id: head,
+      content: viewDoc?.content ?? "",
+      timestamp: meta?.time ? meta.time * 1000 : Date.now(),
+    };
   }
 
-  async addSnapshot(content: string): Promise<Snapshot | null> {
-    const connection = await this.open();
-    if (!content.trim()) return null;
-    const history = await this.getHistory();
-    if (history[0]?.content === content) return history[0];
-    const snapshot: Snapshot = { id: 0, content, timestamp: Date.now() };
-    return new Promise((resolve, reject) => {
-      const transaction = connection.transaction("history", "readwrite");
-      const request = transaction
-        .objectStore("history")
-        .add({ content, timestamp: snapshot.timestamp });
-      request.onsuccess = () => {
-        snapshot.id = request.result as number;
-        resolve(snapshot);
-      };
-      request.onerror = () => reject(request.error);
-    });
+  getHistory(): Snapshot[] {
+    if (!this.handle) return [];
+    const handle = this.handle;
+    return handle
+      .history()
+      .slice()
+      .reverse()
+      .map((heads) => this.snapshotForHeads(handle, heads));
+  }
+
+  addSnapshot(content: string): Snapshot | null {
+    if (!this.handle || !content.trim()) return null;
+    const current = this.handle.doc()?.content;
+    if (current !== content) {
+      this.handle.change((doc) => {
+        Automerge.updateText(doc, ["content"], content);
+      });
+    }
+    const heads = this.handle.heads();
+    if (!heads.length) return null;
+    return this.snapshotForHeads(this.handle, heads);
   }
 }

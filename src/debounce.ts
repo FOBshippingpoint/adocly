@@ -1,9 +1,6 @@
 export function debounce<Args extends unknown[]>(
   callback: (...args: Args) => void,
-  {
-    isLeadingEdge = false,
-    waitMs = 3000,
-  }: { isLeadingEdge?: boolean; waitMs?: number } = {},
+  { isLeadingEdge = false, waitMs = 3000 }: { isLeadingEdge?: boolean; waitMs?: number } = {},
 ) {
   let timeoutId: number | undefined;
   return (...args: Args) => {
