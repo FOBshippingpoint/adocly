@@ -30,8 +30,6 @@ export class Database {
         }
         if (!db.objectStoreNames.contains("settings"))
           db.createObjectStore("settings", { keyPath: "key" });
-        if (!db.objectStoreNames.contains("images"))
-          db.createObjectStore("images", { keyPath: "name" });
       };
       request.onsuccess = () => {
         this.connection = request.result;
@@ -67,28 +65,28 @@ export class Database {
     });
   }
 
+  private async getImageDir(): Promise<FileSystemDirectoryHandle> {
+    const root = await navigator.storage.getDirectory();
+    return root.getDirectoryHandle("images", { create: true });
+  }
+
   async saveImage(name: string, blob: Blob): Promise<string> {
-    const connection = await this.open();
-    return new Promise((resolve, reject) => {
-      const transaction = connection.transaction("images", "readwrite");
-      transaction
-        .objectStore("images")
-        .put({ name, blob, timestamp: Date.now() });
-      transaction.oncomplete = () => resolve(name);
-      transaction.onerror = () => reject(transaction.error);
-    });
+    const dir = await this.getImageDir();
+    const fileHandle = await dir.getFileHandle(name, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return name;
   }
 
   async getImage(name: string): Promise<Blob | null> {
-    const connection = await this.open();
-    return new Promise((resolve) => {
-      const request = connection
-        .transaction("images", "readonly")
-        .objectStore("images")
-        .get(name);
-      request.onsuccess = () => resolve(request.result?.blob || null);
-      request.onerror = () => resolve(null);
-    });
+    try {
+      const dir = await this.getImageDir();
+      const fileHandle = await dir.getFileHandle(name);
+      return await fileHandle.getFile();
+    } catch {
+      return null;
+    }
   }
 
   async getHistory(): Promise<Snapshot[]> {
