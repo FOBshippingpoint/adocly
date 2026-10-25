@@ -22,6 +22,7 @@
             spellcheck="false"
             placeholder="Write AsciiDoc..."
           ></textarea>
+          <div id="caret-layer" class="caret-layer" aria-hidden="true"></div>
         </section>
         <div
           id="splitter"
@@ -41,16 +42,29 @@
       </main>
 
       <nav class="toolbar" id="toolbar" aria-label="Document controls">
+        <button
+          id="collab-button"
+          type="button"
+          class="collab-button"
+          hidden
+          aria-label="Collaborators"
+          aria-expanded="false"
+          title="Collaborators & profile"
+        >
+          <span id="collab-avatars" class="collab-avatars"></span>
+        </button>
+        <span id="collab-divider" class="toolbar-divider" aria-hidden="true" hidden></span>
         <button id="history-button" type="button">History</button>
         <button
           id="share-button"
           type="button"
           class="icon-button"
-          aria-label="Copy #hash link"
-          title="Copy #hash link"
+          aria-label="Share document"
+          aria-expanded="false"
+          aria-controls="share-menu"
+          title="Share document"
         >
           <svg
-            class="icon-off"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -64,18 +78,6 @@
             <circle cx="18" cy="19" r="3" />
             <line x1="8.59" x2="15.42" y1="13.51" y2="17.49" />
             <line x1="15.41" x2="8.59" y1="6.51" y2="10.49" />
-          </svg>
-          <svg
-            class="icon-on"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M20 6 9 17l-5-5" />
           </svg>
         </button>
         <button
@@ -115,7 +117,70 @@
           </svg>
         </button>
       </nav>
+      <div id="collab-menu" class="collab-menu" aria-label="Collaborators">
+        <div
+          id="collab-emoji-picker"
+          class="collab-emoji-picker"
+          role="group"
+          aria-label="Choose emoji"
+        ></div>
+        <div id="collab-list" class="collab-list" role="list"></div>
+      </div>
       <div id="history-menu" class="history-menu" aria-label="Document history"></div>
+      <div id="share-menu" class="share-menu" aria-label="Share document">
+        <button id="share-action-button" type="button" class="share-action-button">
+          Share document
+        </button>
+        <div id="share-link-row" class="share-link-row" hidden>
+          <input
+            id="share-url-input"
+            class="share-url-input"
+            type="text"
+            readonly
+            aria-label="Document link"
+          />
+          <button
+            id="share-copy-button"
+            type="button"
+            class="share-copy-button"
+            aria-label="Copy link"
+            title="Copy link"
+          >
+            <svg
+              class="copy-icon lucide lucide-copy preview-icon"
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect width="14" height="14" x="8" y="8" rx="2" />
+              <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10" />
+            </svg>
+            <svg
+              class="copied-icon lucide lucide-check preview-icon"
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div id="cursor-layer" class="cursor-layer" aria-hidden="true"></div>
       <nav class="toolbar view-toolbar" aria-label="Editor view">
         <div
           class="view-switch"
@@ -136,6 +201,57 @@
         </div>
       </nav>
     </div>
+
+    <template id="collab-emoji-button-template">
+      <button type="button"></button>
+    </template>
+
+    <template id="collab-avatar-template">
+      <span class="collab-avatar"></span>
+    </template>
+
+    <template id="collab-item-template">
+      <div class="collab-item" role="listitem">
+        <span class="collab-item-main">
+          <span class="collab-avatar"></span>
+          <span class="collab-item-name"></span>
+        </span>
+        <span class="collab-item-status"></span>
+      </div>
+    </template>
+
+    <template id="collab-selection-template">
+      <div class="collab-selection"></div>
+    </template>
+
+    <template id="collab-caret-template">
+      <div class="collab-caret">
+        <span class="collab-caret-nub"></span>
+        <span class="collab-caret-flag"></span>
+      </div>
+    </template>
+
+    <template id="collab-cursor-template">
+      <div class="collab-cursor">
+        <svg class="collab-cursor-arrow" viewBox="0 0 18 22" fill="none" aria-hidden="true">
+          <path
+            d="M2.2 1.8L15.8 11.2L9.3 12.4L6.1 18.6L2.2 1.8Z"
+            fill="var(--collab-color)"
+            stroke="#ffffff"
+            stroke-width="1.5"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <span class="collab-cursor-emoji"></span>
+      </div>
+    </template>
+
+    <template id="history-item-template">
+      <div class="history-item">
+        <span class="time"></span>
+        <span class="sub"></span>
+      </div>
+    </template>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

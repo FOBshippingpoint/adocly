@@ -1,14 +1,9 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "types": ["vite/client"],
-    "strict": true,
     "noEmit": true,
-    "isolatedModules": true,
-    "skipLibCheck": true
-  },
-  "include": ["src", "vite.config.ts"]
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true
+  }
 }

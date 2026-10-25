@@ -13,8 +13,8 @@ export class HashShare {
   static async encode(text: string) {
     const stream = new CompressionStream("deflate-raw");
     const writer = stream.writable.getWriter();
-    writer.write(new TextEncoder().encode(text));
-    writer.close();
+    await writer.write(new TextEncoder().encode(text));
+    await writer.close();
     const bytes = new Uint8Array(await new Response(stream.readable).arrayBuffer());
     const payload = `z=${this.encodeBytes(bytes)}`;
     return { hash: `#${payload}`, canShare: payload.length <= this.maxLength };
@@ -23,8 +23,8 @@ export class HashShare {
     if (!hash.startsWith("#z=")) return null;
     const stream = new DecompressionStream("deflate-raw");
     const writer = stream.writable.getWriter();
-    writer.write(this.decodeBytes(hash.slice(3)));
-    writer.close();
+    await writer.write(this.decodeBytes(hash.slice(3)));
+    await writer.close();
     return new TextDecoder().decode(await new Response(stream.readable).arrayBuffer());
   }
 }

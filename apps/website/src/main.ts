@@ -1,17 +1,22 @@
 import Asciidoctor from "@asciidoctor/core";
+import { type DocHandle, isValidAutomergeUrl } from "@automerge/automerge-repo/slim";
 import hljs from "highlight.js/lib/common";
 import { Idiomorph } from "idiomorph";
 import "@asciidoctor/core/dist/css/asciidoctor.css";
 import lightTheme from "highlight.js/styles/github.css?url";
 import darkTheme from "highlight.js/styles/github-dark.css?url";
 import "./style.css";
-import { Database, type Snapshot, type Theme, type ViewMode } from "./database";
+import { CollaboratorManager } from "./collaborators";
+import { Database, type DocSchema, type Snapshot, type Theme, type ViewMode } from "./database";
 import { HashShare } from "./hash-share";
 import { debounce } from "./debounce";
 
-import { $, $$ } from "./dom";
+import { $, $$, forkTemplate } from "./dom";
 
 const asciidoctor = Asciidoctor();
+let collaborators: CollaboratorManager | null = null;
+let localStartCursor: string | null = null;
+let localEndCursor: string | null = null;
 
 const DEFAULT_CONTENT = `= AsciiDoc Document
 :toc:
@@ -59,6 +64,7 @@ function setSplitRatio(value: number) {
   layout.style.setProperty("--split", `${state.splitRatio}%`);
   splitter.setAttribute("aria-valuenow", String(Math.round(state.splitRatio)));
   saveLayout();
+  collaborators?.refreshCarets();
 }
 
 function setViewMode(mode: ViewMode) {
@@ -72,6 +78,7 @@ function setViewMode(mode: ViewMode) {
     button.setAttribute("aria-pressed", String(active));
   });
   saveLayout();
+  collaborators?.refreshCarets();
 }
 
 function setTheme(theme: Theme) {
@@ -101,7 +108,9 @@ async function loadImageData(name: string) {
 }
 
 async function cacheImages(text: string) {
-  const names = [...text.matchAll(/image::?(img-[a-z0-9]+\.[a-z0-9]+)/gi)].map((match) => match[1]);
+  const names = [...text.matchAll(/image::?images\/(img_[a-z0-9]+\.[a-z0-9]+)/gi)].map(
+    ([, name]) => name,
+  );
   await Promise.all(names.map((name) => loadImageData(name)));
 }
 
@@ -122,7 +131,8 @@ async function renderPreview(text: string, request: number) {
       Idiomorph.morph(preview, html, { morphStyle: "innerHTML" });
       preview.$$<HTMLElement>("pre code").forEach((code) => hljs.highlightElement(code));
       preview.$$<HTMLImageElement>("img").forEach((image) => {
-        const name = image.getAttribute("src");
+        const src = image.getAttribute("src");
+        const name = src?.startsWith("images/") ? src.slice("images/".length) : null;
         const dataUrl = name && imageCache.get(name);
         if (dataUrl) {
           image.src = dataUrl;
@@ -143,7 +153,7 @@ const debouncedLargePreview = debounce(
 function schedulePreview(text: string) {
   const request = ++state.previewRequest;
   if (text.length < 10000) {
-    renderPreview(text, request);
+    void renderPreview(text, request);
     return;
   }
   debouncedLargePreview(text, request);
@@ -151,7 +161,7 @@ function schedulePreview(text: string) {
 
 function expandImageReferences(text: string) {
   return text.replace(
-    /(image::?)(img-[a-z0-9]+\.[a-z0-9]+)(\[[^\]]*\])/gi,
+    /(image::?)images\/(img_[a-z0-9]+\.[a-z0-9]+)(\[[^\]]*\])/gi,
     (match, prefix, name, attributes) => {
       const dataUrl = imageCache.get(name);
       return dataUrl ? `${prefix}${dataUrl}${attributes}` : match;
@@ -159,45 +169,85 @@ function expandImageReferences(text: string) {
   );
 }
 
+function updateLocalCursors() {
+  if (document.activeElement !== source) return;
+  localStartCursor = database.getCursor(source.selectionStart ?? 0);
+  localEndCursor = database.getCursor(source.selectionEnd ?? 0);
+}
+
+function syncUrlHash() {
+  if (!database.isShared()) return;
+  const docUrl = database.getDocUrl();
+  if (docUrl) location.hash = `#${docUrl}`;
+}
+
 async function syncDocument(text: string) {
   schedulePreview(text);
-  const encoded = await HashShare.encode(text);
-  $<HTMLElement>("#share-button")!.hidden = !encoded.canShare;
-  if (encoded.canShare) {
-    try {
-      history.replaceState(null, "", encoded.hash);
-    } catch (_) {}
-  } else if (location.hash) {
-    try {
-      history.replaceState(null, "", location.pathname + location.search);
-    } catch (_) {}
-  }
+  syncUrlHash();
 }
 
 function recordSnapshot(text: string) {
   const snapshot = database.addSnapshot(text);
   state.lastSnapshot = Date.now();
-  renderHistory(database.getHistory(), snapshot?.id);
+  const menu = $<HTMLElement>("#history-menu");
+  if (menu?.classList.contains("open")) {
+    renderHistory(database.getHistory(), snapshot?.id);
+  }
 }
 
 function renderHistory(items: Snapshot[], activeId: string | null = null) {
   const menu = $<HTMLElement>("#history-menu")!;
-  menu.innerHTML = items
-    .map(
-      (item) =>
-        `<div class="history-item ${item.id === activeId ? "current" : ""}" data-id="${item.id}"><span>${new Date(item.timestamp).toLocaleTimeString()}</span><span class="sub">${item.content.length}c</span></div>`,
-    )
-    .join("");
-  menu.$$<HTMLElement>("[data-id]").forEach((item) =>
+  const frag = document.createDocumentFragment();
+  const dates = items.map((snapshot) => new Date(snapshot.timestamp));
+  const spansDates = new Set(dates.map((date) => date.toDateString())).size > 1;
+  for (const [index, snapshot] of items.entries()) {
+    const item = forkTemplate<HTMLDivElement>("history-item-template");
+    item.classList.toggle("current", snapshot.id === activeId);
+    item.dataset.id = snapshot.id;
+    const date = dates[index];
+    item.$<HTMLSpanElement>(".time")!.textContent = spansDates
+      ? `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`
+      : date.toLocaleTimeString();
+    item.$<HTMLSpanElement>(".sub")!.textContent = `${snapshot.content.length}c`;
     item.on("click", async () => {
-      const snapshot = items.find((entry) => entry.id === item.dataset.id)!;
       source.value = snapshot.content;
       recordSnapshot(snapshot.content);
+      collaborators?.notifyContentChange();
       await syncDocument(snapshot.content);
       menu.classList.remove("open");
       $<HTMLElement>("#history-button")!.classList.remove("active");
-    }),
-  );
+    });
+    frag.appendChild(item);
+  }
+  menu.replaceChildren(frag);
+}
+
+function bindHandle(handle: DocHandle<DocSchema>) {
+  handle.on("change", ({ doc }) => {
+    const nextText = doc?.content ?? "";
+    if (source.value !== nextText) {
+      const isFocused = document.activeElement === source;
+      const fallbackStart = source.selectionStart ?? 0;
+      const fallbackEnd = source.selectionEnd ?? 0;
+      const dir = source.selectionDirection ?? "none";
+      const nextStart =
+        database.getCursorPosition(localStartCursor) ?? Math.min(fallbackStart, nextText.length);
+      const nextEnd =
+        database.getCursorPosition(localEndCursor) ?? Math.min(fallbackEnd, nextText.length);
+
+      source.value = nextText;
+      if (isFocused) {
+        source.setSelectionRange(Math.min(nextStart, nextEnd), Math.max(nextStart, nextEnd), dir);
+        updateLocalCursors();
+      }
+      schedulePreview(nextText);
+    }
+    collaborators?.refreshCarets();
+    const menu = $<HTMLElement>("#history-menu");
+    if (menu?.classList.contains("open")) {
+      renderHistory(database.getHistory());
+    }
+  });
 }
 
 function insertTextAtCursor(text: string) {
@@ -210,32 +260,39 @@ function insertTextAtCursor(text: string) {
 async function addImages(files: File[]) {
   for (const file of files) {
     const extension = (file.type.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "");
-    const name = `img-${Date.now().toString(36)}.${extension}`;
+    const name = `img_${Date.now().toString(36)}.${extension}`;
     imageCache.set(name, await blobToDataUrl(file));
     await database.saveImage(name, file);
-    insertTextAtCursor(`image::${name}[]\n`);
+    insertTextAtCursor(`image::images/${name}[]\n`);
   }
 }
 
 function bindSource() {
   source.on("input", () => {
     const text = source.value;
-    syncDocument(text);
+    database.updateContent(text);
+    updateLocalCursors();
+    void syncDocument(text);
+    collaborators?.notifyContentChange();
     if (Date.now() - state.lastSnapshot > 15000) recordSnapshot(text);
     else {
       clearTimeout(state.snapshotTimer);
       state.snapshotTimer = setTimeout(() => recordSnapshot(text), 1500);
     }
   });
+  source.on("keyup", updateLocalCursors);
+  source.on("pointerup", updateLocalCursors);
+  source.on("select", updateLocalCursors);
+  source.on("focus", updateLocalCursors);
   source.on("copy", (event) => {
     const selected = source.value.slice(source.selectionStart, source.selectionEnd);
-    if (!selected || !/image::?img-/i.test(selected)) return;
+    if (!selected || !/image::?images\/img_/i.test(selected)) return;
     event.preventDefault();
     event.clipboardData?.setData("text/plain", expandImageReferences(selected));
   });
   source.on("cut", (event) => {
     const selected = source.value.slice(source.selectionStart, source.selectionEnd);
-    if (!selected || !/image::?img-/i.test(selected)) return;
+    if (!selected || !/image::?images\/img_/i.test(selected)) return;
     event.preventDefault();
     event.clipboardData?.setData("text/plain", expandImageReferences(selected));
     source.setRangeText("", source.selectionStart, source.selectionEnd, "end");
@@ -248,7 +305,7 @@ function bindSource() {
       .filter((file): file is File => file !== null);
     if (files.length) {
       event.preventDefault();
-      addImages(files);
+      void addImages(files);
     }
   });
   source.on("dragover", (event) => {
@@ -260,7 +317,7 @@ function bindSource() {
     );
     if (files.length) {
       event.preventDefault();
-      addImages(files);
+      void addImages(files);
     }
   });
 }
@@ -325,23 +382,82 @@ function bindSplitter() {
   });
 }
 
+function renderShareMenu() {
+  const shared = database.isShared();
+  $<HTMLElement>("#share-action-button")!.hidden = shared;
+  $<HTMLElement>("#share-link-row")!.hidden = !shared;
+  $<HTMLInputElement>("#share-url-input")!.value = shared
+    ? `${location.href.split("#")[0]}#${database.getDocUrl()}`
+    : "";
+}
+
+function syncCollabVisibility() {
+  const shared = database.isShared();
+  const collabButton = $<HTMLElement>("#collab-button")!;
+  const collabMenu = $<HTMLElement>("#collab-menu")!;
+  collabButton.hidden = !shared;
+  $<HTMLElement>("#collab-divider")!.hidden = !shared;
+  if (!shared) {
+    collabMenu.classList.remove("open");
+    collabButton.classList.remove("active");
+    collabButton.setAttribute("aria-expanded", "false");
+  }
+}
+
+function closeShareMenu() {
+  $("#share-menu")!.classList.remove("open");
+  $("#share-button")!.classList.remove("active");
+  $("#share-button")!.setAttribute("aria-expanded", "false");
+}
+
 function bindToolbar() {
   const historyButton = $<HTMLElement>("#history-button")!;
   const menu = $<HTMLElement>("#history-menu")!;
+  $("#collab-button")!.on("click", closeShareMenu);
   historyButton.on("click", () => {
+    closeShareMenu();
+    const collabMenu = $<HTMLElement>("#collab-menu");
+    const collabButton = $<HTMLElement>("#collab-button");
+    if (collabMenu?.classList.contains("open")) {
+      collabMenu.classList.remove("open");
+      collabButton?.classList.remove("active");
+      collabButton?.setAttribute("aria-expanded", "false");
+    }
     const open = menu.classList.toggle("open");
     historyButton.classList.toggle("active", open);
     if (open) renderHistory(database.getHistory());
   });
-  $<HTMLElement>("#share-button")!.on("click", async () => {
-    const encoded = await HashShare.encode(source.value);
-    if (!encoded.canShare) return;
-    const url = location.href.split("#")[0] + encoded.hash;
-    await navigator.clipboard.writeText(url);
-    const button = $<HTMLElement>("#share-button")!;
+  const shareButton = $("#share-button")!;
+  const shareMenu = $("#share-menu")!;
+  shareButton.on("click", () => {
+    $("#collab-menu")!.classList.remove("open");
+    $("#collab-button")!.classList.remove("active");
+    $("#collab-button")!.setAttribute("aria-expanded", "false");
+    menu.classList.remove("open");
+    historyButton.classList.remove("active");
+    const open = shareMenu.classList.toggle("open");
+    shareButton.classList.toggle("active", open);
+    shareButton.setAttribute("aria-expanded", String(open));
+    if (open) renderShareMenu();
+  });
+  $("#share-action-button")!.on("click", () => {
+    database.enableSharing();
+    syncCollabVisibility();
+    syncUrlHash();
+    renderShareMenu();
+  });
+  $("#share-copy-button")!.on("click", async () => {
+    await navigator.clipboard.writeText($<HTMLInputElement>("#share-url-input")!.value);
+    const button = $("#share-copy-button")!;
     button.classList.add("active");
+    button.setAttribute("aria-label", "Copied");
+    button.setAttribute("title", "Copied");
     clearTimeout(state.shareTimer);
-    state.shareTimer = setTimeout(() => button.classList.remove("active"), 1200);
+    state.shareTimer = setTimeout(() => {
+      button.classList.remove("active");
+      button.setAttribute("aria-label", "Copy link");
+      button.setAttribute("title", "Copy link");
+    }, 1200);
   });
   $<HTMLElement>("#theme-button")!.on("click", () => {
     const theme = state.theme === "dark" ? "light" : "dark";
@@ -354,6 +470,9 @@ function bindToolbar() {
     }),
   );
   document.on("pointerdown", (event) => {
+    if (!event.composedPath().includes(shareMenu) && !event.composedPath().includes(shareButton)) {
+      closeShareMenu();
+    }
     if (
       menu.classList.contains("open") &&
       !event.composedPath().includes(menu) &&
@@ -376,6 +495,20 @@ function bindToolbar() {
 }
 
 async function loadFromHash() {
+  syncCollabVisibility();
+  const rawHash = location.hash.slice(1);
+  if (rawHash && isValidAutomergeUrl(rawHash)) {
+    if (database.getDocUrl() === rawHash) return true;
+    const handle = await database.openDocument(rawHash);
+    if (!handle) return false;
+    syncCollabVisibility();
+    bindHandle(handle);
+    collaborators?.attachHandle(handle);
+    source.value = database.getContent(DEFAULT_CONTENT);
+    await syncDocument(source.value);
+    return true;
+  }
+
   if (!location.hash.startsWith("#z=")) return false;
   try {
     const text = await HashShare.decode(location.hash);
@@ -384,13 +517,18 @@ async function loadFromHash() {
     recordSnapshot(text);
     await syncDocument(text);
     return true;
-  } catch (_) {
+  } catch {
     return false;
   }
 }
 
 async function init() {
-  await database.init(DEFAULT_CONTENT);
+  const initialHash = location.hash.slice(1);
+  const handle = await database.init(DEFAULT_CONTENT, initialHash);
+  bindHandle(handle);
+  source.value = database.getContent(DEFAULT_CONTENT);
+  syncCollabVisibility();
+
   const savedLayout = database.getSetting("layout", {
     mode: matchMedia("(max-width: 700px)").matches ? "write" : "split",
     splitRatio: 50,
@@ -403,12 +541,23 @@ async function init() {
   bindToolbar();
   const savedTheme = database.getSetting("theme");
   setTheme(savedTheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+
   if (!(await loadFromHash())) {
     source.value = database.getContent(DEFAULT_CONTENT);
     recordSnapshot(source.value);
     await syncDocument(source.value);
+  } else {
+    source.value = database.getContent(DEFAULT_CONTENT);
+    await syncDocument(source.value);
   }
+
+  collaborators = new CollaboratorManager({
+    database,
+    source,
+    preview,
+  });
+
   window.on("hashchange", loadFromHash);
 }
 
-init();
+void init();
