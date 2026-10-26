@@ -290,8 +290,8 @@ export class CollaboratorManager {
         caret: this.self.caret,
         pointer: this.self.pointer,
       },
-      heartbeatMs: 1500,
-      peerTtlMs: 6000,
+      heartbeatMs: 30_000,
+      peerTtlMs: 90_000,
     });
 
     window.setTimeout(() => {

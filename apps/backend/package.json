@@ -1,0 +1,26 @@
+{
+  "name": "backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local --var UPLOAD_MODE:local",
+    "build": "tsc && wrangler deploy --dry-run --outdir dist",
+    "test": "vp test --passWithNoTests",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@automerge/automerge": "^3.5.0",
+    "@automerge/automerge-repo": "2.6.0-alpha.3",
+    "@aws-sdk/client-s3": "catalog:",
+    "@aws-sdk/s3-request-presigner": "catalog:",
+    "hono": "^4.12.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261024.1",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "wrangler": "4.152.0"
+  }
+}

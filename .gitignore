@@ -32,6 +32,12 @@ dist-ssr
 
 # AI agent worktrees
 .claude/worktrees/
+.playwright-mcp/
 !.vscode/
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# Cloudflare local state
+.wrangler/
+.dev.vars
+.dev.vars.*

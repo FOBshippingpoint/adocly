@@ -1,5 +1,9 @@
 import Asciidoctor from "@asciidoctor/core";
-import { type DocHandle, isValidAutomergeUrl } from "@automerge/automerge-repo/slim";
+import {
+  type DocHandle,
+  type DocHandleChangePayload,
+  isValidAutomergeUrl,
+} from "@automerge/automerge-repo/slim";
 import hljs from "highlight.js/lib/common";
 import { Idiomorph } from "idiomorph";
 import "@asciidoctor/core/dist/css/asciidoctor.css";
@@ -98,6 +102,11 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+function randomId64(): string {
+  const [uint64] = window.crypto.getRandomValues(new BigUint64Array(1));
+  return uint64.toString(36).padStart(13, "0");
+}
+
 async function loadImageData(name: string) {
   if (imageCache.has(name)) return imageCache.get(name);
   const blob = await database.getImage(name);
@@ -107,15 +116,16 @@ async function loadImageData(name: string) {
   return dataUrl;
 }
 
-async function cacheImages(text: string) {
-  const names = [...text.matchAll(/image::?images\/(img_[a-z0-9]+\.[a-z0-9]+)/gi)].map(
-    ([, name]) => name,
-  );
-  await Promise.all(names.map((name) => loadImageData(name)));
+function localImageNames(text: string): string[] {
+  return [...text.matchAll(/image::?images\/([a-z0-9_-]+\.[a-z0-9]+)/gi)].map(([, name]) => name);
+}
+
+async function cacheImages() {
+  await Promise.all(database.getAssetNames().map((name) => loadImageData(name)));
 }
 
 async function renderPreview(text: string, request: number) {
-  await cacheImages(text);
+  await cacheImages();
   if (request !== state.previewRequest) return;
 
   const html = asciidoctor.convert(text, {
@@ -133,9 +143,9 @@ async function renderPreview(text: string, request: number) {
       preview.$$<HTMLImageElement>("img").forEach((image) => {
         const src = image.getAttribute("src");
         const name = src?.startsWith("images/") ? src.slice("images/".length) : null;
-        const dataUrl = name && imageCache.get(name);
-        if (dataUrl) {
-          image.src = dataUrl;
+        const url = name && (database.getPublishedAssetUrl(name) ?? imageCache.get(name));
+        if (url) {
+          image.src = url;
         }
       });
       resolve();
@@ -161,10 +171,20 @@ function schedulePreview(text: string) {
 
 function expandImageReferences(text: string) {
   return text.replace(
-    /(image::?)images\/(img_[a-z0-9]+\.[a-z0-9]+)(\[[^\]]*\])/gi,
+    /(image::?)images\/([a-z0-9_-]+\.[a-z0-9]+)(\[[^\]]*\])/gi,
     (match, prefix, name, attributes) => {
-      const dataUrl = imageCache.get(name);
-      return dataUrl ? `${prefix}${dataUrl}${attributes}` : match;
+      const url = database.getPublishedAssetUrl(name) ?? imageCache.get(name);
+      return url ? `${prefix}${url}${attributes}` : match;
+    },
+  );
+}
+
+function rewritePublishedImageReferences(text: string) {
+  return text.replace(
+    /(image::?)images\/([a-z0-9_-]+\.[a-z0-9]+)(\[[^\]]*\])/gi,
+    (match, prefix, name, attributes) => {
+      const url = database.getPublishedAssetUrl(name);
+      return url ? `${prefix}${url}${attributes}` : match;
     },
   );
 }
@@ -182,6 +202,8 @@ function syncUrlHash() {
 }
 
 async function syncDocument(text: string) {
+  database.trackAssets(localImageNames(text));
+  database.rememberDocument();
   schedulePreview(text);
   syncUrlHash();
 }
@@ -222,8 +244,12 @@ function renderHistory(items: Snapshot[], activeId: string | null = null) {
   menu.replaceChildren(frag);
 }
 
+let unbindHandle = () => {};
+
 function bindHandle(handle: DocHandle<DocSchema>) {
-  handle.on("change", ({ doc }) => {
+  unbindHandle();
+  const onChange = ({ doc }: DocHandleChangePayload<DocSchema>) => {
+    if (handle !== database.getHandle()) return;
     const nextText = doc?.content ?? "";
     if (source.value !== nextText) {
       const isFocused = document.activeElement === source;
@@ -240,14 +266,17 @@ function bindHandle(handle: DocHandle<DocSchema>) {
         source.setSelectionRange(Math.min(nextStart, nextEnd), Math.max(nextStart, nextEnd), dir);
         updateLocalCursors();
       }
-      schedulePreview(nextText);
     }
+    database.rememberDocument();
+    schedulePreview(nextText);
     collaborators?.refreshCarets();
     const menu = $<HTMLElement>("#history-menu");
     if (menu?.classList.contains("open")) {
       renderHistory(database.getHistory());
     }
-  });
+  };
+  handle.on("change", onChange);
+  unbindHandle = () => handle.off("change", onChange);
 }
 
 function insertTextAtCursor(text: string) {
@@ -259,10 +288,23 @@ function insertTextAtCursor(text: string) {
 
 async function addImages(files: File[]) {
   for (const file of files) {
-    const extension = (file.type.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "");
-    const name = `img_${Date.now().toString(36)}.${extension}`;
+    const extension =
+      file.type === "image/svg+xml"
+        ? "svg"
+        : (file.type.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "");
+    const name = `${randomId64()}.${extension}`;
+    if (database.isShared()) {
+      const key = await database.uploadAsset(file);
+      if (key) {
+        database.addAsset(name, key);
+        insertTextAtCursor(`image::${database.getAssetUrl(key)}[]\n`);
+        continue;
+      }
+      console.error(`Failed to upload ${file.name}`);
+    }
     imageCache.set(name, await blobToDataUrl(file));
     await database.saveImage(name, file);
+    database.addAsset(name);
     insertTextAtCursor(`image::images/${name}[]\n`);
   }
 }
@@ -277,7 +319,7 @@ function bindSource() {
     if (Date.now() - state.lastSnapshot > 15000) recordSnapshot(text);
     else {
       clearTimeout(state.snapshotTimer);
-      state.snapshotTimer = setTimeout(() => recordSnapshot(text), 1500);
+      state.snapshotTimer = window.setTimeout(() => recordSnapshot(text), 1500);
     }
   });
   source.on("keyup", updateLocalCursors);
@@ -286,13 +328,13 @@ function bindSource() {
   source.on("focus", updateLocalCursors);
   source.on("copy", (event) => {
     const selected = source.value.slice(source.selectionStart, source.selectionEnd);
-    if (!selected || !/image::?images\/img_/i.test(selected)) return;
+    if (!selected || !/image::?images\/[a-z0-9_-]+\.[a-z0-9]+\[/i.test(selected)) return;
     event.preventDefault();
     event.clipboardData?.setData("text/plain", expandImageReferences(selected));
   });
   source.on("cut", (event) => {
     const selected = source.value.slice(source.selectionStart, source.selectionEnd);
-    if (!selected || !/image::?images\/img_/i.test(selected)) return;
+    if (!selected || !/image::?images\/[a-z0-9_-]+\.[a-z0-9]+\[/i.test(selected)) return;
     event.preventDefault();
     event.clipboardData?.setData("text/plain", expandImageReferences(selected));
     source.setRangeText("", source.selectionStart, source.selectionEnd, "end");
@@ -410,7 +452,121 @@ function closeShareMenu() {
   $("#share-button")!.setAttribute("aria-expanded", "false");
 }
 
+function closeFilesMenu() {
+  $("#files-menu")!.classList.remove("open");
+  $("#files-button")!.classList.remove("active");
+  $("#files-button")!.setAttribute("aria-expanded", "false");
+}
+
+function selectDocument(handle: DocHandle<DocSchema>) {
+  clearTimeout(state.snapshotTimer);
+  bindHandle(handle);
+  collaborators?.attachHandle(handle);
+  localStartCursor = null;
+  localEndCursor = null;
+  imageCache.clear();
+  source.value = database.getContent();
+  source.scrollTop = 0;
+  preview.scrollTop = 0;
+  history.replaceState(
+    null,
+    "",
+    location.pathname + location.search + (database.isShared() ? `#${handle.url}` : ""),
+  );
+  closeShareMenu();
+  closeFilesMenu();
+  $("#history-menu")!.classList.remove("open");
+  $("#history-menu")!.replaceChildren();
+  $("#history-button")!.classList.remove("active");
+  syncCollabVisibility();
+  void syncDocument(source.value);
+}
+
+function renderFiles() {
+  const list = $("#file-list")!;
+  const frag = document.createDocumentFragment();
+  for (const file of database.getFiles()) {
+    const row = forkTemplate<HTMLDivElement>("file-row-template");
+    const button = row.$<HTMLButtonElement>(".open-file-button")!;
+    button.textContent = file.title;
+    button.title = file.title;
+    button.setAttribute("aria-current", String(file.url === database.getDocUrl()));
+    button.on("click", async () => {
+      clearTimeout(state.snapshotTimer);
+      recordSnapshot(source.value);
+      $$("#files-menu button").forEach((item) => ((item as HTMLButtonElement).disabled = true));
+      try {
+        const handle = await database.openDocument(file.url, file.shared);
+        if (handle) selectDocument(handle);
+        else button.textContent = "Could not open file. Try again.";
+      } finally {
+        $$("#files-menu button").forEach((item) => ((item as HTMLButtonElement).disabled = false));
+      }
+    });
+    const removeButton = row.$<HTMLButtonElement>(".remove-file-button")!;
+    removeButton.setAttribute("aria-label", `Remove ${file.title}`);
+    removeButton.on("click", async () => {
+      if (
+        !window.confirm(
+          `Remove “${file.title}” from this browser?${file.shared ? " Other collaborators will keep their copies." : " This cannot be undone."}`,
+        )
+      )
+        return;
+      $$("#files-menu button").forEach((item) => ((item as HTMLButtonElement).disabled = true));
+      try {
+        if (file.url === database.getDocUrl()) {
+          clearTimeout(state.snapshotTimer);
+          const nextFile = database.getFiles().find((item) => item.url !== file.url);
+          const nextHandle =
+            nextFile && (await database.openDocument(nextFile.url, nextFile.shared));
+          selectDocument(nextHandle || database.createDocument());
+          source.focus();
+        }
+        database.removeDocument(file.url);
+        renderFiles();
+        if ($("#files-menu")!.classList.contains("open")) {
+          $<HTMLButtonElement>("#file-list button")?.focus();
+        }
+      } finally {
+        $$("#files-menu button").forEach((item) => ((item as HTMLButtonElement).disabled = false));
+      }
+    });
+    frag.appendChild(row);
+  }
+  list.replaceChildren(frag);
+}
+
 function bindToolbar() {
+  $("#files-button")!.on("click", () => {
+    const open = !$("#files-menu")!.classList.contains("open");
+    closeShareMenu();
+    $("#history-menu")!.classList.remove("open");
+    $("#history-button")!.classList.remove("active");
+    $("#files-menu")!.classList.toggle("open", open);
+    $("#files-button")!.classList.toggle("active", open);
+    $("#files-button")!.setAttribute("aria-expanded", String(open));
+    if (open) renderFiles();
+  });
+  document.on("pointerdown", (event) => {
+    if (
+      !event.composedPath().includes($("#files-menu")!) &&
+      !event.composedPath().includes($("#files-button")!)
+    )
+      closeFilesMenu();
+  });
+  document.on("keydown", (event) => {
+    if (event.key === "Escape" && $("#files-menu")!.classList.contains("open")) {
+      closeFilesMenu();
+      $<HTMLButtonElement>("#files-button")!.focus();
+    }
+  });
+  $("#new-file-button")!.on("click", () => {
+    clearTimeout(state.snapshotTimer);
+    recordSnapshot(source.value);
+    selectDocument(database.createDocument());
+    if (state.viewMode === "preview") setViewMode("write");
+    source.focus();
+  });
   const historyButton = $<HTMLElement>("#history-button")!;
   const menu = $<HTMLElement>("#history-menu")!;
   $("#collab-button")!.on("click", closeShareMenu);
@@ -445,6 +601,10 @@ function bindToolbar() {
     syncCollabVisibility();
     syncUrlHash();
     renderShareMenu();
+    void database
+      .publishAssets()
+      .catch(console.error)
+      .finally(() => database.updateContent(rewritePublishedImageReferences(source.value)));
   });
   $("#share-copy-button")!.on("click", async () => {
     await navigator.clipboard.writeText($<HTMLInputElement>("#share-url-input")!.value);
@@ -453,7 +613,7 @@ function bindToolbar() {
     button.setAttribute("aria-label", "Copied");
     button.setAttribute("title", "Copied");
     clearTimeout(state.shareTimer);
-    state.shareTimer = setTimeout(() => {
+    state.shareTimer = window.setTimeout(() => {
       button.classList.remove("active");
       button.setAttribute("aria-label", "Copy link");
       button.setAttribute("title", "Copy link");
@@ -499,13 +659,11 @@ async function loadFromHash() {
   const rawHash = location.hash.slice(1);
   if (rawHash && isValidAutomergeUrl(rawHash)) {
     if (database.getDocUrl() === rawHash) return true;
+    clearTimeout(state.snapshotTimer);
+    recordSnapshot(source.value);
     const handle = await database.openDocument(rawHash);
     if (!handle) return false;
-    syncCollabVisibility();
-    bindHandle(handle);
-    collaborators?.attachHandle(handle);
-    source.value = database.getContent(DEFAULT_CONTENT);
-    await syncDocument(source.value);
+    selectDocument(handle);
     return true;
   }
 

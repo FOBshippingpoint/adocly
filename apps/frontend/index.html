@@ -41,6 +41,15 @@
         </section>
       </main>
 
+      <nav class="toolbar file-toolbar" aria-label="File controls">
+        <button id="files-button" type="button" aria-expanded="false" aria-controls="files-menu">
+          Files
+        </button>
+      </nav>
+      <div id="files-menu" class="files-menu" aria-label="Files">
+        <button id="new-file-button" type="button">New File</button>
+        <div id="file-list" class="file-list"></div>
+      </div>
       <nav class="toolbar" id="toolbar" aria-label="Document controls">
         <button
           id="collab-button"
@@ -243,6 +252,32 @@
           />
         </svg>
         <span class="collab-cursor-emoji"></span>
+      </div>
+    </template>
+
+    <template id="file-row-template">
+      <div class="file-row">
+        <button type="button" class="open-file-button"></button>
+        <button type="button" class="remove-file-button" title="Remove file">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="lucide lucide-trash preview-icon"
+          >
+            <path d="M10 11v6" />
+            <path d="M14 11v6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+            <path d="M3 6h18" />
+            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+        </button>
       </div>
     </template>
 

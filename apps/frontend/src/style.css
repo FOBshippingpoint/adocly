@@ -61,7 +61,7 @@ textarea {
   border: 0;
   outline: 0;
   resize: none;
-  padding: 2rem;
+  padding: 3.5rem 2rem 2rem;
   background: var(--bg);
   color: var(--fg);
   font:
@@ -223,6 +223,10 @@ body[data-theme="dark"] .preview .exampleblock > .content {
   height: 16px;
   background: var(--border);
   margin: 0 2px;
+}
+.file-toolbar {
+  right: auto;
+  left: 16px;
 }
 .collab-button {
   gap: 4px;
@@ -731,4 +735,71 @@ body[data-theme="dark"] .preview .exampleblock > .content {
 }
 .share-copy-button.active .copied-icon {
   display: block;
+}
+
+.files-menu {
+  position: fixed;
+  top: 48px;
+  left: 16px;
+  z-index: 30;
+  display: none;
+  width: min(240px, calc(100vw - 32px));
+  max-height: calc(100dvh - 64px);
+  padding: 8px;
+  overflow-y: auto;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--fg);
+  font: 12px sans-serif;
+}
+.files-menu.open {
+  display: block;
+}
+.files-menu button {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 5px 7px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.files-menu button:hover,
+.files-menu button[aria-current="true"] {
+  background: var(--border);
+}
+.files-menu button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.file-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  gap: 4px;
+}
+.files-menu .remove-file-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  color: var(--muted);
+}
+.remove-file-button svg {
+  width: 16px;
+  height: 16px;
 }

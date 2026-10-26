@@ -30,7 +30,14 @@ export interface CollaboratorSetting {
   color: string;
 }
 
+export interface FileEntry {
+  url: AutomergeUrl;
+  title: string;
+  shared: boolean;
+}
+
 export interface Settings {
+  files: FileEntry[];
   docUrl: AutomergeUrl;
   theme: Theme;
   layout: LayoutSetting;
@@ -39,9 +46,13 @@ export interface Settings {
 
 export interface DocSchema {
   content: string;
+  assets?: Record<string, string>;
 }
 
-const SYNC_SERVER_URL = "wss://sync.automerge.org";
+const SYNC_SERVER_URL = import.meta.env.VITE_SYNC_SERVER_URL ?? "ws://localhost:8787";
+const ASSET_SERVER_URL = (
+  import.meta.env.VITE_ASSET_SERVER_URL ?? SYNC_SERVER_URL.replace(/^ws/, "http")
+).replace(/\/+$/, "");
 
 export class Database {
   private shared = false;
@@ -107,11 +118,12 @@ export class Database {
       if (savedUrl && isValidAutomergeUrl(savedUrl)) {
         try {
           this.handle = await this.waitForHandle(savedUrl, 3000);
+          if (this.getFiles().find((file) => file.url === savedUrl)?.shared) this.enableSharing();
           return this.handle;
         } catch {}
       }
 
-      this.handle = this.repo.create<DocSchema>({ content: defaultContent });
+      this.handle = this.repo.create<DocSchema>({ content: defaultContent, assets: {} });
       this.setSetting("docUrl", this.handle.url);
       return this.handle;
     })();
@@ -119,18 +131,54 @@ export class Database {
     return this.initPromise;
   }
 
-  async openDocument(url: string): Promise<DocHandle<DocSchema> | null> {
+  async openDocument(url: string, shared = true): Promise<DocHandle<DocSchema> | null> {
     if (!this.repo || !isValidAutomergeUrl(url)) return null;
-    this.enableSharing();
+    if (shared) this.enableNetwork();
     if (this.handle?.url === url) return this.handle;
     try {
       const handle = await this.waitForHandle(url, 10000);
       this.handle = handle;
+      this.shared = shared;
+      this.rememberDocument();
       this.setSetting("docUrl", handle.url);
       return handle;
     } catch {
       return null;
     }
+  }
+
+  createDocument(): DocHandle<DocSchema> {
+    this.handle = this.repo!.create<DocSchema>({ content: "", assets: {} });
+    this.shared = false;
+    this.rememberDocument();
+    this.setSetting("docUrl", this.handle.url);
+    return this.handle;
+  }
+
+  getFiles(): FileEntry[] {
+    return this.getSetting("files", []);
+  }
+
+  removeDocument(url: AutomergeUrl): void {
+    this.repo!.delete(url);
+    this.setSetting(
+      "files",
+      this.getFiles().filter((file) => file.url !== url),
+    );
+  }
+
+  rememberDocument(): void {
+    if (!this.handle) return;
+    const files = this.getFiles();
+    const title =
+      this.getContent()
+        .match(/^=\s+(.+)$/m)?.[1]
+        ?.trim() || "Untitled";
+    const entry = { url: this.handle.url, title, shared: this.shared };
+    const index = files.findIndex((file) => file.url === entry.url);
+    if (index === -1) files.push(entry);
+    else files[index] = entry;
+    this.setSetting("files", files);
   }
 
   isShared(): boolean {
@@ -139,6 +187,11 @@ export class Database {
 
   enableSharing(): void {
     this.shared = true;
+    this.rememberDocument();
+    this.enableNetwork();
+  }
+
+  private enableNetwork(): void {
     if (!this.networkEnabled && this.repo) {
       this.networkEnabled = true;
       this.repo.networkSubsystem.addNetworkAdapter(new BroadcastChannelNetworkAdapter());
@@ -170,6 +223,33 @@ export class Database {
         Automerge.updateText(doc, ["content"], content);
       });
     }
+  }
+
+  trackAssets(names: string[]): void {
+    if (!this.handle) return;
+    const assets = this.handle.doc()?.assets;
+    const missing = names.filter((name) => !(name in (assets ?? {})));
+    if (assets && missing.length === 0) return;
+    this.handle.change((doc) => {
+      doc.assets ??= {};
+      for (const name of missing) doc.assets[name] = "";
+    });
+  }
+
+  addAsset(name: string, key = ""): void {
+    this.handle?.change((doc) => {
+      doc.assets ??= {};
+      doc.assets[name] = key;
+    });
+  }
+
+  getAssetNames(): string[] {
+    return Object.keys(this.handle?.doc()?.assets ?? {});
+  }
+
+  getPublishedAssetUrl(name: string): string | null {
+    const key = this.handle?.doc()?.assets?.[name];
+    return key ? this.getAssetUrl(key) : null;
   }
 
   getCursor(position: number): string | null {
@@ -211,6 +291,50 @@ export class Database {
 
   setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void {
     localStorage.setItem(key, JSON.stringify(value));
+  }
+
+  getAssetUrl(name: string): string {
+    return `${ASSET_SERVER_URL}/assets/${encodeURIComponent(name)}`;
+  }
+
+  async uploadAsset(blob: Blob): Promise<string | null> {
+    try {
+      const response = await fetch(`${ASSET_SERVER_URL}/assets/upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contentType: blob.type }),
+      });
+      if (!response.ok) return null;
+      const { key, uploadUrl } = (await response.json()) as { key: string; uploadUrl: string };
+      const upload = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": blob.type },
+        body: blob,
+      });
+      return upload.ok ? key : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async publishAssets(): Promise<void> {
+    const assets = this.handle?.doc()?.assets ?? {};
+    const pending = Object.entries(assets).filter(([, key]) => !key);
+    const results = await Promise.allSettled(
+      pending.map(async ([name]) => {
+        const image = await this.getImage(name);
+        if (!image) throw new Error(`Local image not found: ${name}`);
+        const key = await this.uploadAsset(image);
+        if (!key) throw new Error(`Failed to upload local image: ${name}`);
+        this.addAsset(name, key);
+      }),
+    );
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `Failed to upload ${failures.length} image(s)`);
+    }
   }
 
   private async getImageDir(): Promise<FileSystemDirectoryHandle> {
