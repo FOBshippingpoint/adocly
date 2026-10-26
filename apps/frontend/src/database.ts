@@ -13,7 +13,7 @@ import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-index
 
 export interface Snapshot {
   id: string;
-  content: string;
+  heads: UrlHeads;
   timestamp: number;
 }
 
@@ -364,10 +364,9 @@ export class Database {
   private snapshotForHeads(handle: DocHandle<DocSchema>, heads: UrlHeads): Snapshot {
     const head = heads[0];
     const meta = handle.metadata(head);
-    const viewDoc = handle.view(heads).doc();
     return {
       id: head,
-      content: viewDoc?.content ?? "",
+      heads,
       timestamp: meta?.time ? meta.time * 1000 : Date.now(),
     };
   }
@@ -380,6 +379,10 @@ export class Database {
       .slice()
       .reverse()
       .map((heads) => this.snapshotForHeads(handle, heads));
+  }
+
+  getSnapshotContent(heads: UrlHeads): string {
+    return this.handle!.view(heads).doc()?.content ?? "";
   }
 
   addSnapshot(content: string): Snapshot | null {

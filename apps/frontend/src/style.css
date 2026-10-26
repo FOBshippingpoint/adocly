@@ -538,10 +538,6 @@ body[data-theme="dark"] .preview .exampleblock > .content {
 .history-item.current {
   background: var(--border);
 }
-.history-item .sub {
-  color: var(--muted);
-  font-size: 11px;
-}
 .view-toolbar {
   top: auto;
   right: 50%;

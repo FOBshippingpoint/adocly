@@ -11,7 +11,7 @@ import lightTheme from "highlight.js/styles/github.css?url";
 import darkTheme from "highlight.js/styles/github-dark.css?url";
 import "./style.css";
 import { CollaboratorManager } from "./collaborators";
-import { Database, type DocSchema, type Snapshot, type Theme, type ViewMode } from "./database";
+import { Database, type DocSchema, type Theme, type ViewMode } from "./database";
 import { HashShare } from "./hash-share";
 import { debounce } from "./debounce";
 
@@ -213,11 +213,12 @@ function recordSnapshot(text: string) {
   state.lastSnapshot = Date.now();
   const menu = $<HTMLElement>("#history-menu");
   if (menu?.classList.contains("open")) {
-    renderHistory(database.getHistory(), snapshot?.id);
+    renderHistory(snapshot?.id);
   }
 }
 
-function renderHistory(items: Snapshot[], activeId: string | null = null) {
+function renderHistory(activeId: string | null = null) {
+  const items = database.getHistory();
   const menu = $<HTMLElement>("#history-menu")!;
   const frag = document.createDocumentFragment();
   const dates = items.map((snapshot) => new Date(snapshot.timestamp));
@@ -230,14 +231,15 @@ function renderHistory(items: Snapshot[], activeId: string | null = null) {
     item.$<HTMLSpanElement>(".time")!.textContent = spansDates
       ? `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`
       : date.toLocaleTimeString();
-    item.$<HTMLSpanElement>(".sub")!.textContent = `${snapshot.content.length}c`;
     item.on("click", async () => {
-      source.value = snapshot.content;
-      recordSnapshot(snapshot.content);
-      collaborators?.notifyContentChange();
-      await syncDocument(snapshot.content);
+      const content = database.getSnapshotContent(snapshot.heads);
       menu.classList.remove("open");
       $<HTMLElement>("#history-button")!.classList.remove("active");
+      source.value = content;
+      database.updateContent(content);
+      recordSnapshot(content);
+      collaborators?.notifyContentChange();
+      await syncDocument(content);
     });
     frag.appendChild(item);
   }
@@ -272,7 +274,7 @@ function bindHandle(handle: DocHandle<DocSchema>) {
     collaborators?.refreshCarets();
     const menu = $<HTMLElement>("#history-menu");
     if (menu?.classList.contains("open")) {
-      renderHistory(database.getHistory());
+      renderHistory();
     }
   };
   handle.on("change", onChange);
@@ -581,7 +583,7 @@ function bindToolbar() {
     }
     const open = menu.classList.toggle("open");
     historyButton.classList.toggle("active", open);
-    if (open) renderHistory(database.getHistory());
+    if (open) renderHistory();
   });
   const shareButton = $("#share-button")!;
   const shareMenu = $("#share-menu")!;
