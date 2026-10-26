@@ -1,0 +1,42 @@
+= Adocly
+:toc:
+
+image::./apps/frontend/public/favicon.svg[Adocly Logo, align=center]
+
+[.text-center]
+Real-time https://asciidoc.org/[AsciiDoc] collaboration tool.
+
+image::https://github.com/user-attachments/assets/0f06482b-16d8-4a79-84ab-5ffeae86bd43[]
+
+== Quickstart
+
+* Using Adocly: https://fobshippingpoint.github.io/adocly
+
+* Test your self:
+
+. Install https://viteplus.dev/guide/[Vite+]
+. Install dependencies:
++
+[,sh]
+----
+vp install
+----
+. Start local server:
++
+[,sh]
+----
+vp run frontend#dev
+----
+. Go to http://localhost:5173
+. (Optional) Spawn server if you need real-time collaboration feature:
++
+[,sh]
+----
+vp run backend#dev
+----
+
+
+
+
+* Host on Cloudflare:
+. TODO
