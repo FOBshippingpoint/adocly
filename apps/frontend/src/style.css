@@ -347,7 +347,7 @@ body[data-theme="dark"] .preview .exampleblock > .content {
   visibility: hidden;
   pointer-events: none;
   overflow: hidden;
-  padding: 2rem;
+  padding: 3.5rem 2rem 2rem;
   white-space: pre-wrap;
   word-wrap: break-word;
   overflow-wrap: break-word;
