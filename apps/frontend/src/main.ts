@@ -683,12 +683,6 @@ async function loadFromHash() {
 }
 
 async function init() {
-  const initialHash = location.hash.slice(1);
-  const handle = await database.init(DEFAULT_CONTENT, initialHash);
-  bindHandle(handle);
-  source.value = database.getContent(DEFAULT_CONTENT);
-  syncCollabVisibility();
-
   const savedLayout = database.getSetting("layout", {
     mode: matchMedia("(max-width: 700px)").matches ? "write" : "split",
     splitRatio: 50,
@@ -696,11 +690,18 @@ async function init() {
   state.viewMode = savedLayout.mode;
   setSplitRatio(savedLayout.splitRatio);
   setViewMode(savedLayout.mode);
+  const savedTheme = database.getSetting("theme");
+  setTheme(savedTheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+
+  const initialHash = location.hash.slice(1);
+  const handle = await database.init(DEFAULT_CONTENT, initialHash);
+  bindHandle(handle);
+  source.value = database.getContent(DEFAULT_CONTENT);
+  syncCollabVisibility();
+
   bindSource();
   bindSplitter();
   bindToolbar();
-  const savedTheme = database.getSetting("theme");
-  setTheme(savedTheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 
   if (!(await loadFromHash())) {
     source.value = database.getContent(DEFAULT_CONTENT);
