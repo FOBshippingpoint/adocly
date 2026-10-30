@@ -641,6 +641,10 @@ body[data-theme="dark"] .preview .exampleblock > .content {
 .history-item.current::before {
   background: var(--border);
 }
+.history-empty {
+  padding: 13px 17px;
+  color: var(--muted);
+}
 .view-toolbar {
   top: auto;
   right: 50%;

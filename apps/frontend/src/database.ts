@@ -3,6 +3,7 @@ import wasmUrl from "@automerge/automerge/automerge.wasm?url";
 import {
   type AutomergeUrl,
   type DocHandle,
+  encodeHeads,
   isValidAutomergeUrl,
   Repo,
   type UrlHeads,
@@ -229,7 +230,7 @@ export class Database {
     if (!this.handle) return;
     const assets = this.handle.doc()?.assets;
     const missing = names.filter((name) => !(name in (assets ?? {})));
-    if (assets && missing.length === 0) return;
+    if (missing.length === 0) return;
     this.handle.change((doc) => {
       doc.assets ??= {};
       for (const name of missing) doc.assets[name] = "";
@@ -361,24 +362,21 @@ export class Database {
     }
   }
 
-  private snapshotForHeads(handle: DocHandle<DocSchema>, heads: UrlHeads): Snapshot {
-    const head = heads[0];
-    const meta = handle.metadata(head);
+  private toSnapshot(meta: Automerge.ChangeMetadata): Snapshot {
     return {
-      id: head,
-      heads,
-      timestamp: meta?.time ? meta.time * 1000 : Date.now(),
+      id: meta.hash,
+      heads: encodeHeads([meta.hash]),
+      timestamp: meta.time ? meta.time * 1000 : Date.now(),
     };
   }
 
   getHistory(): Snapshot[] {
-    if (!this.handle) return [];
-    const handle = this.handle;
-    return handle
-      .history()
-      .slice()
+    const doc = this.handle?.doc();
+    if (!this.handle || !doc) return [];
+    return Automerge.getChangesMetaSince(doc, [])
+      .filter((meta) => meta.message === "snapshot")
       .reverse()
-      .map((heads) => this.snapshotForHeads(handle, heads));
+      .map((meta) => this.toSnapshot(meta));
   }
 
   getSnapshotContent(heads: UrlHeads): string {
@@ -388,8 +386,18 @@ export class Database {
   addSnapshot(content: string): Snapshot | null {
     if (!this.handle || !content.trim()) return null;
     this.updateContent(content);
-    const heads = this.handle.heads();
-    if (!heads.length) return null;
-    return this.snapshotForHeads(this.handle, heads);
+    const doc = this.handle.doc();
+    if (!doc) return null;
+
+    const changes = Automerge.getChangesMetaSince(doc, []);
+    const lastSnapshot = changes.findLast((meta) => meta.message === "snapshot");
+    if (!lastSnapshot || this.getSnapshotContent(encodeHeads([lastSnapshot.hash])) !== content) {
+      this.handle.update((d) => Automerge.emptyChange(d, { message: "snapshot" }));
+    }
+
+    const latest = Automerge.getChangesMetaSince(this.handle.doc()!, []).findLast(
+      (meta) => meta.message === "snapshot",
+    );
+    return latest ? this.toSnapshot(latest) : null;
   }
 }

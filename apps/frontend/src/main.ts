@@ -47,6 +47,7 @@ const state = {
   snapshotTimer: undefined as number | undefined,
   previewRequest: 0,
   lastSnapshot: 0,
+  activeSnapshotId: null as string | null,
   shareTimer: undefined as number | undefined,
 };
 const source = $<HTMLTextAreaElement>("#source-editor")!;
@@ -209,23 +210,37 @@ async function syncDocument(text: string) {
 }
 
 function recordSnapshot(text: string) {
+  clearTimeout(state.snapshotTimer);
+  state.snapshotTimer = undefined;
   const snapshot = database.addSnapshot(text);
   state.lastSnapshot = Date.now();
+  state.activeSnapshotId = snapshot?.id ?? null;
   const menu = $<HTMLElement>("#history-menu");
   if (menu?.classList.contains("open")) {
-    renderHistory(snapshot?.id);
+    renderHistory(state.activeSnapshotId);
+  }
+}
+
+function flushPendingSnapshot() {
+  if (state.snapshotTimer !== undefined) {
+    recordSnapshot(source.value);
   }
 }
 
 function renderHistory(activeId: string | null = null) {
   const items = database.getHistory();
   const menu = $<HTMLElement>("#history-menu")!;
+  if (items.length === 0) {
+    menu.replaceChildren(forkTemplate<HTMLDivElement>("history-empty-template"));
+    return;
+  }
+  const currentId = activeId ?? state.activeSnapshotId ?? items[0]?.id ?? null;
   const frag = document.createDocumentFragment();
   const dates = items.map((snapshot) => new Date(snapshot.timestamp));
   const spansDates = new Set(dates.map((date) => date.toDateString())).size > 1;
   for (const [index, snapshot] of items.entries()) {
     const item = forkTemplate<HTMLDivElement>("history-item-template");
-    item.classList.toggle("current", snapshot.id === activeId);
+    item.classList.toggle("current", snapshot.id === currentId);
     item.dataset.id = snapshot.id;
     const date = dates[index];
     item.$<HTMLSpanElement>(".time")!.textContent = spansDates
@@ -235,9 +250,11 @@ function renderHistory(activeId: string | null = null) {
       const content = database.getSnapshotContent(snapshot.heads);
       menu.classList.remove("open");
       $<HTMLElement>("#history-button")!.classList.remove("active");
+      clearTimeout(state.snapshotTimer);
+      state.snapshotTimer = undefined;
+      state.activeSnapshotId = snapshot.id;
       source.value = content;
       database.updateContent(content);
-      recordSnapshot(content);
       collaborators?.notifyContentChange();
       await syncDocument(content);
     });
@@ -314,6 +331,7 @@ async function addImages(files: File[]) {
 function bindSource() {
   source.on("input", () => {
     const text = source.value;
+    state.activeSnapshotId = null;
     database.updateContent(text);
     updateLocalCursors();
     void syncDocument(text);
@@ -462,6 +480,9 @@ function closeFilesMenu() {
 
 function selectDocument(handle: DocHandle<DocSchema>) {
   clearTimeout(state.snapshotTimer);
+  state.snapshotTimer = undefined;
+  state.lastSnapshot = 0;
+  state.activeSnapshotId = null;
   bindHandle(handle);
   collaborators?.attachHandle(handle);
   localStartCursor = null;
@@ -494,8 +515,7 @@ function renderFiles() {
     button.title = file.title;
     button.setAttribute("aria-current", String(file.url === database.getDocUrl()));
     button.on("click", async () => {
-      clearTimeout(state.snapshotTimer);
-      recordSnapshot(source.value);
+      flushPendingSnapshot();
       $$("#files-menu button").forEach((item) => ((item as HTMLButtonElement).disabled = true));
       try {
         const handle = await database.openDocument(file.url, file.shared);
@@ -563,8 +583,7 @@ function bindToolbar() {
     }
   });
   $("#new-file-button")!.on("click", () => {
-    clearTimeout(state.snapshotTimer);
-    recordSnapshot(source.value);
+    flushPendingSnapshot();
     selectDocument(database.createDocument());
     if (state.viewMode === "preview") setViewMode("write");
     source.focus();
@@ -661,8 +680,7 @@ async function loadFromHash() {
   const rawHash = location.hash.slice(1);
   if (rawHash && isValidAutomergeUrl(rawHash)) {
     if (database.getDocUrl() === rawHash) return true;
-    clearTimeout(state.snapshotTimer);
-    recordSnapshot(source.value);
+    flushPendingSnapshot();
     const handle = await database.openDocument(rawHash);
     if (!handle) return false;
     selectDocument(handle);
