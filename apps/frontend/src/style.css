@@ -438,6 +438,30 @@ body[data-theme="dark"] .preview .exampleblock > .content {
   overflow: hidden;
   z-index: 5;
 }
+.sync-flash {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 4;
+  pointer-events: none;
+  background: var(--fg);
+  opacity: 0;
+}
+.sync-flash.flash {
+  animation: sync-flash 700ms ease-out;
+}
+@keyframes sync-flash {
+  0% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.12;
+  }
+  100% {
+    opacity: 0;
+  }
+}
 .collab-selection {
   position: absolute;
   top: 0;

@@ -14,11 +14,14 @@ import { CollaboratorManager } from "./collaborators";
 import { Database, type DocSchema, type Theme, type ViewMode } from "./database";
 import { HashShare } from "./hash-share";
 import { debounce } from "./debounce";
+import { createLineTrackingRegistry, ScrollSync } from "./scroll-sync";
 
 import { $, $$, forkTemplate } from "./dom";
 
 const asciidoctor = Asciidoctor();
+const lineTrackingRegistry = createLineTrackingRegistry(asciidoctor);
 let collaborators: CollaboratorManager | null = null;
+let scrollSync: ScrollSync | null = null;
 let localStartCursor: string | null = null;
 let localEndCursor: string | null = null;
 
@@ -73,6 +76,8 @@ function setSplitRatio(value: number) {
 }
 
 function setViewMode(mode: ViewMode) {
+  const prevMode = state.viewMode;
+  const scrollPos = prevMode !== mode ? (scrollSync?.capturePosition() ?? 0) : 0;
   state.viewMode = mode;
   if (!matchMedia("(max-width: 700px)").matches) state.desktopViewMode = mode;
   layout.dataset.viewMode = mode;
@@ -83,6 +88,9 @@ function setViewMode(mode: ViewMode) {
     button.setAttribute("aria-pressed", String(active));
   });
   saveLayout();
+  if (prevMode !== mode) {
+    scrollSync?.restorePosition(scrollPos);
+  }
   collaborators?.refreshCarets();
 }
 
@@ -131,6 +139,8 @@ async function renderPreview(text: string, request: number) {
 
   const html = asciidoctor.convert(text, {
     safe: "safe",
+    sourcemap: true,
+    extension_registry: lineTrackingRegistry,
     attributes: { showtitle: true, "source-highlighter": "highlight.js" },
   }) as string;
 
@@ -149,6 +159,7 @@ async function renderPreview(text: string, request: number) {
           image.src = url;
         }
       });
+      scrollSync?.notifyPreviewRendered();
       resolve();
     });
   });
@@ -729,6 +740,12 @@ async function init() {
     source.value = database.getContent(DEFAULT_CONTENT);
     await syncDocument(source.value);
   }
+
+  scrollSync = new ScrollSync({
+    source,
+    preview,
+    getViewMode: () => state.viewMode,
+  });
 
   collaborators = new CollaboratorManager({
     database,
