@@ -309,11 +309,18 @@ function bindHandle(handle: DocHandle<DocSchema>) {
   unbindHandle = () => handle.off("change", onChange);
 }
 
+function replaceSelection(text: string) {
+  source.focus();
+  if (!(text ? document.execCommand("insertText", false, text) : document.execCommand("delete"))) {
+    source.setRangeText(text, source.selectionStart, source.selectionEnd, "end");
+    source.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+}
+
 function insertTextAtCursor(text: string) {
   const start = source.selectionStart;
   const prefix = start > 0 && source.value[start - 1] !== "\n" ? "\n" : "";
-  source.setRangeText(`${prefix}${text}`, start, source.selectionEnd, "end");
-  source.dispatchEvent(new Event("input", { bubbles: true }));
+  replaceSelection(`${prefix}${text}`);
 }
 
 async function addImages(files: File[]) {
@@ -362,14 +369,15 @@ function bindSource() {
     if (!selected || !/image::?images\/[a-z0-9_-]+\.[a-z0-9]+\[/i.test(selected)) return;
     event.preventDefault();
     event.clipboardData?.setData("text/plain", expandImageReferences(selected));
+    event.clipboardData?.setData("application/x-adocly", selected);
   });
   source.on("cut", (event) => {
     const selected = source.value.slice(source.selectionStart, source.selectionEnd);
     if (!selected || !/image::?images\/[a-z0-9_-]+\.[a-z0-9]+\[/i.test(selected)) return;
     event.preventDefault();
     event.clipboardData?.setData("text/plain", expandImageReferences(selected));
-    source.setRangeText("", source.selectionStart, source.selectionEnd, "end");
-    source.dispatchEvent(new Event("input", { bubbles: true }));
+    event.clipboardData?.setData("application/x-adocly", selected);
+    replaceSelection("");
   });
   source.on("paste", (event) => {
     const files = [...(event.clipboardData?.items || [])]
@@ -379,6 +387,12 @@ function bindSource() {
     if (files.length) {
       event.preventDefault();
       void addImages(files);
+      return;
+    }
+    const text = event.clipboardData?.getData("application/x-adocly");
+    if (text) {
+      event.preventDefault();
+      replaceSelection(text);
     }
   });
   source.on("dragover", (event) => {
