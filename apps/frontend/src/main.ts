@@ -14,6 +14,7 @@ import { CollaboratorManager } from "./collaborators";
 import { Database, type DocSchema, type Theme, type ViewMode } from "./database";
 import { HashShare } from "./hash-share";
 import { debounce } from "./debounce";
+import { toAsciiDocLink } from "./link";
 import { createLineTrackingRegistry, ScrollSync } from "./scroll-sync";
 
 import { $, $$, forkTemplate } from "./dom";
@@ -393,6 +394,13 @@ function bindSource() {
     if (text) {
       event.preventDefault();
       replaceSelection(text);
+      return;
+    }
+    const selected = source.value.slice(source.selectionStart, source.selectionEnd);
+    const link = toAsciiDocLink(selected, event.clipboardData?.getData("text/plain") ?? "");
+    if (link) {
+      event.preventDefault();
+      replaceSelection(link);
     }
   });
   source.on("dragover", (event) => {
